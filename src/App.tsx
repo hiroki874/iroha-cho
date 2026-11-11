@@ -1,3 +1,4 @@
+
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { enablePush, hasPushSubscription, syncPushJobs, type Notice, type PushJob } from './push'
 import {
@@ -31,6 +32,44 @@ const timeMins = (s: string) => {
   return h * 60 + m
 }
 const fmtTime = (s: string) => s || '未設定'
+
+// 残り時間の表示
+const countdownText = (
+  date: string,
+  time: string,
+  kind: 'task' | 'event',
+  now: Date
+) => {
+  if (!date) return ''
+
+  // タスクの時刻未設定は23:59を期限とする
+  const targetTime = time || (kind === 'task' ? '23:59' : '00:00')
+  const target = new Date(`${date}T${targetTime}:00`)
+  const diff = target.getTime() - now.getTime()
+
+  // 期限・開始時刻を過ぎた場合
+  if (diff <= 0) {
+    return kind === 'task' ? '期限切れ' : '開始済み'
+  }
+
+  // 24時間未満なら時間・分で表示
+  if (diff < 24 * 60 * 60 * 1000) {
+    const totalMinutes = Math.ceil(diff / 60000)
+    const hours = Math.floor(totalMinutes / 60)
+    const minutes = totalMinutes % 60
+    return `あと${hours}時間${minutes}分`
+  }
+
+  // 24時間以上ならカレンダー上の日数で表示
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const targetDay = new Date(`${date}T00:00:00`)
+  const days = Math.round(
+    (targetDay.getTime() - today.getTime()) / (24 * 60 * 60 * 1000)
+  )
+
+  return `あと${days}日`
+}
+
 const sortTasks = (a: Task, b: Task) => {
   if (a.dueDate && b.dueDate) return a.dueDate.localeCompare(b.dueDate) || a.dueTime.localeCompare(b.dueTime)
   if (a.dueDate) return -1
@@ -76,6 +115,7 @@ export default function App() {
   }, [])
 
   useEffect(() => { localStorage.setItem(STORAGE, JSON.stringify(data)) }, [data])
+
   useEffect(() => {
     if (!pushReady) return
     const jobs: PushJob[] = []
@@ -139,8 +179,7 @@ export default function App() {
   const tasks = useMemo(() => data.tasks.filter(t => !t.done), [data.tasks])
   const priorityTasks = useMemo(() => tasks.filter(t => t.priority).sort(sortTasks), [tasks])
   const overdueTasks = useMemo(() => tasks.filter(t => !t.priority && t.dueDate && t.dueDate < todayISO()).sort(sortTasks), [tasks])
-  const normalTasks = useMemo(() => tasks.filter(t => !t.priority && (!t.dueDate || t.dueDate >= todayISO())).sort(sortTasks)
-  , [tasks])
+  const normalTasks = useMemo(() => tasks.filter(t => !t.priority && (!t.dueDate || t.dueDate >= todayISO())).sort(sortTasks), [tasks])
   const now = clock
   const nowMin = now.getHours()*60 + now.getMinutes()
   const todayEvents = displayEvents.filter(e => e.date === todayISO()).sort((a,b) => (timeMins(a.start) ?? -1) - (timeMins(b.start) ?? -1))
@@ -177,9 +216,36 @@ export default function App() {
         {page === 'home' && <section className="home-page">
           <div className="welcome"><div><p className="eyebrow">MY PLANNER</p><h1>{now.getFullYear()}年{now.getMonth()+1}月{now.getDate()}日</h1></div></div>
           <div className="home-panels">
-            <article className="panel"><h2>優先タスク</h2>{priorityTasks.length ? priorityTasks.slice(0,4).map(t=><button className="home-line" key={t.id} onClick={()=>setDetailTask(t)}>{t.title}<small>{t.dueDate ? dateText(t.dueDate) : '期限なし'}</small></button>) : <p className="muted">優先タスクはまだありません</p>}</article>
-            <article className="panel"><h2>現在の予定</h2>{currentEvent ? <button className="home-line" onClick={()=>setDetailEvent(currentEvent)}>{currentEvent.title}<small>{currentEvent.start}〜{fmtTime(currentEvent.end)}</small></button> : <p className="muted">現在の予定はありません</p>}</article>
-            <article className="panel"><h2>次の予定</h2>{nextEvent ? <button className="home-line" onClick={()=>setDetailEvent(nextEvent)}>{nextEvent.title}<small>{nextEvent.start}〜{fmtTime(nextEvent.end)}</small></button> : <p className="muted">次の予定はありません</p>}</article>
+            <article className="panel">
+              <h2>優先タスク</h2>
+              {priorityTasks.length ? priorityTasks.slice(0,4).map(t=>(
+                <button className="home-line" key={t.id} onClick={()=>setDetailTask(t)}>
+                  {t.title}
+                  <small>{t.dueDate ? `${dateText(t.dueDate)} ${t.dueTime}` : '期限なし'}</small>
+                  {t.dueDate && <small className="countdown">{countdownText(t.dueDate,t.dueTime,'task',now)}</small>}
+                </button>
+              )) : <p className="muted">優先タスクはまだありません</p>}
+            </article>
+            <article className="panel">
+              <h2>現在の予定</h2>
+              {currentEvent ? (
+                <button className="home-line" onClick={()=>setDetailEvent(currentEvent)}>
+                  {currentEvent.title}
+                  <small>{currentEvent.start}〜{fmtTime(currentEvent.end)}</small>
+                  <small className="countdown">{countdownText(currentEvent.date,currentEvent.start,'event',now)}</small>
+                </button>
+              ) : <p className="muted">現在の予定はありません</p>}
+            </article>
+            <article className="panel">
+              <h2>次の予定</h2>
+              {nextEvent ? (
+                <button className="home-line" onClick={()=>setDetailEvent(nextEvent)}>
+                  {nextEvent.title}
+                  <small>{nextEvent.start}〜{fmtTime(nextEvent.end)}</small>
+                  <small className="countdown">{countdownText(nextEvent.date,nextEvent.start,'event',now)}</small>
+                </button>
+              ) : <p className="muted">次の予定はありません</p>}
+            </article>
             <article className="panel memo-preview"><h2>ホーム表示用メモ</h2><p className="memo-preview-text">{memoToText(data.memos.home) || 'メモはまだありません'}</p></article>
           </div>
           <div className="quick-grid">
@@ -192,10 +258,10 @@ export default function App() {
 
         {page === 'todo' && <section className="page-section">
           <div className="page-heading"><h1>TO DOリスト</h1><button className="add-button" onClick={()=>{setEditingTask(null);setTaskForm(true)}}><Plus/></button></div>
-          <TaskGroup title="優先" tasks={priorityTasks} onOpen={setDetailTask} onMenu={setMenuTask} menu={menuTask} onEdit={t=>{setEditingTask(t);setTaskForm(true)}} onDelete={id=>setConfirm({kind:'task',id})} onComplete={id=>setConfirm({kind:'task',id})}/>
-          <TaskGroup title="期限切れ" tasks={overdueTasks} onOpen={setDetailTask} onMenu={setMenuTask} menu={menuTask} onEdit={t=>{setEditingTask(t);setTaskForm(true)}} onDelete={id=>setConfirm({kind:'task',id})} onComplete={id=>setConfirm({kind:'task',id})}/>
-          <TaskGroup title="通常" tasks={normalTasks} onOpen={setDetailTask} onMenu={setMenuTask} menu={menuTask} onEdit={t=>{setEditingTask(t);setTaskForm(true)}} onDelete={id=>setConfirm({kind:'task',id})} onComplete={id=>setConfirm({kind:'task',id})}/>
-          <TaskGroup title="完了" tasks={data.tasks.filter(t=>t.done)} onOpen={setDetailTask} onMenu={setMenuTask} menu={menuTask} onEdit={t=>{setEditingTask(t);setTaskForm(true)}} onDelete={id=>setConfirm({kind:'task',id})} onComplete={()=>{}} completed/>
+          <TaskGroup title="優先" tasks={priorityTasks} now={now} onOpen={setDetailTask} onMenu={setMenuTask} menu={menuTask} onEdit={t=>{setEditingTask(t);setTaskForm(true)}} onDelete={id=>setConfirm({kind:'task',id})} onComplete={id=>setConfirm({kind:'task',id})}/>
+          <TaskGroup title="期限切れ" tasks={overdueTasks} now={now} onOpen={setDetailTask} onMenu={setMenuTask} menu={menuTask} onEdit={t=>{setEditingTask(t);setTaskForm(true)}} onDelete={id=>setConfirm({kind:'task',id})} onComplete={id=>setConfirm({kind:'task',id})}/>
+          <TaskGroup title="通常" tasks={normalTasks} now={now} onOpen={setDetailTask} onMenu={setMenuTask} menu={menuTask} onEdit={t=>{setEditingTask(t);setTaskForm(true)}} onDelete={id=>setConfirm({kind:'task',id})} onComplete={id=>setConfirm({kind:'task',id})}/>
+          <TaskGroup title="完了" tasks={data.tasks.filter(t=>t.done)} now={now} onOpen={setDetailTask} onMenu={setMenuTask} menu={menuTask} onEdit={t=>{setEditingTask(t);setTaskForm(true)}} onDelete={id=>setConfirm({kind:'task',id})} onComplete={()=>{}} completed/>
         </section>}
 
         {page === 'day' && <section className="page-section">
@@ -249,12 +315,18 @@ export default function App() {
   )
 }
 
-function TaskGroup({title,tasks,onOpen,onMenu,menu,onEdit,onDelete,onComplete,completed=false}:{
-  title:string;tasks:Task[];onOpen:(t:Task)=>void;onMenu:(id:string|null)=>void;menu:string|null;onEdit:(t:Task)=>void;onDelete:(id:string)=>void;onComplete:(id:string)=>void;completed?:boolean
+function TaskGroup({title,tasks,onOpen,onMenu,menu,onEdit,onDelete,onComplete,completed=false,now}:{
+  title:string;tasks:Task[];now:Date;onOpen:(t:Task)=>void;onMenu:(id:string|null)=>void;menu:string|null;onEdit:(t:Task)=>void;onDelete:(id:string)=>void;onComplete:(id:string)=>void;completed?:boolean
 }) {
   return <section className="task-group"><h2>{title}<span>{tasks.length}</span></h2>{tasks.length===0?<p className="muted group-empty">タスクはありません</p>:tasks.map(t=><div className={`task-row ${t.done?'is-done':''}`} key={t.id}>
     <button className="check-button" onClick={()=>completed?onDelete(t.id):onComplete(t.id)} aria-label={completed?'削除':'完了'}>{completed?<Check size={18}/>:<Circle size={19}/>}</button>
-    <button className="task-main" onClick={()=>onOpen(t)}><b>{t.title}</b>{t.dueDate&&<small className={t.dueDate<todayISO()&&!t.done?'overdue':''}>{dateText(t.dueDate)} {t.dueTime}</small>}</button>
+    <button className="task-main" onClick={()=>onOpen(t)}>
+      <b>{t.title}</b>
+      {t.dueDate && <>
+        <small>{dateText(t.dueDate)} {t.dueTime}</small>
+        {!completed && <small className="countdown">{countdownText(t.dueDate,t.dueTime,'task',now)}</small>}
+      </>}
+    </button>
     <div className="menu-wrap"><button className="icon-button small" onClick={e=>{e.stopPropagation();onMenu(menu===t.id?null:t.id)}}><MoreVertical size={19}/></button>{menu===t.id&&<div className="popup-menu" onClick={e=>e.stopPropagation()}><button onClick={()=>onEdit(t)}><Pencil size={14}/>編集</button><button onClick={()=>onDelete(t.id)}><Trash2 size={14}/>削除</button></div>}</div>
   </div>)}</section>
 }
@@ -298,6 +370,7 @@ function EventModal({initial,date,allowRecurrence,onClose,onSave}:{initial:Event
     <div className="modal-actions"><button type="button" onClick={onClose}>キャンセル</button><button className="primary" type="submit">{initial?'完了':'追加'}</button></div>
   </form></Modal>
 }
+
 function TimePicker({value,onChange,allowUnset=false}:{value:string;onChange:(value:string)=>void;allowUnset?:boolean}) {
   const [hour,minute]=value ? value.split(':') : ['', '00']
   return <div className="time-rolls event-time-picker">
@@ -316,9 +389,11 @@ function NoticeEditor({notices,onChange}:{notices:Notice[];onChange:(items:Notic
   const patch=(id:string,part:Partial<Notice>)=>onChange(notices.map(n=>n.id===id?{...n,...part}:n))
   return <div className="notice-editor"><div className="notice-heading"><b>通知</b><small>{notices.length}/3件</small></div>{notices.map((n,i)=><div className="notice-row" key={n.id}><div className="notice-row-title">通知{i+1}<button type="button" onClick={()=>onChange(notices.filter(x=>x.id!==n.id))}>削除</button></div><input aria-label="通知日付" type="date" value={n.date} onChange={e=>patch(n.id,{date:e.target.value})}/><div className="time-rolls"><select aria-label="時" value={n.time.split(':')[0]} onChange={e=>patch(n.id,{time:`${e.target.value}:${n.time.split(':')[1]}`})}>{Array.from({length:24},(_,h)=><option key={h} value={String(h).padStart(2,'0')}>{String(h).padStart(2,'0')}時</option>)}</select><select aria-label="分" value={n.time.split(':')[1]} onChange={e=>patch(n.id,{time:`${n.time.split(':')[0]}:${e.target.value}`})}>{['00','05','10','15','20','25','30','35','40','45','50','55'].map(m=><option key={m} value={m}>{m}分</option>)}</select></div></div>)}{notices.length<3&&<button className="add-notice" type="button" onClick={add}>＋ 通知を追加</button>}</div>
 }
+
 function DailyTimeEditor({times,onChange}:{times:string[];onChange:(items:string[])=>void}) {
   return <div className="daily-times">{times.map((time,i)=><div className="daily-time-row" key={i}><b>通知{i+1}</b><div className="time-rolls"><select value={time.split(':')[0]} onChange={e=>onChange(times.map((t,j)=>j===i?`${e.target.value}:${t.split(':')[1]}`:t))}>{Array.from({length:24},(_,h)=><option key={h} value={String(h).padStart(2,'0')}>{String(h).padStart(2,'0')}時</option>)}</select><select value={time.split(':')[1]} onChange={e=>onChange(times.map((t,j)=>j===i?`${t.split(':')[0]}:${e.target.value}`:t))}>{['00','05','10','15','20','25','30','35','40','45','50','55'].map(m=><option key={m} value={m}>{m}分</option>)}</select></div><button onClick={()=>onChange(times.filter((_,j)=>j!==i))}>削除</button></div>)}{times.length<3&&<button className="add-notice" onClick={()=>onChange([...times,'08:00'])}>＋ 時刻を追加</button>}</div>
 }
+
 function MemoEditor({page,value,onChange}:{page:'home'|'other';value:string;onChange:(html:string)=>void}) {
   const editorRef = useRef<HTMLDivElement>(null)
   useEffect(() => { if (editorRef.current) editorRef.current.innerHTML = memoToHtml(value) }, [page])

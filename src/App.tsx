@@ -68,6 +68,13 @@ export default function App() {
   const [pushReady, setPushReady] = useState(hasPushSubscription())
   const [pushMessage, setPushMessage] = useState('')
 
+  // 現在時刻を1分ごとに更新する
+  const [clock, setClock] = useState(() => new Date())
+  useEffect(() => {
+    const timer = window.setInterval(() => setClock(new Date()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
+
   useEffect(() => { localStorage.setItem(STORAGE, JSON.stringify(data)) }, [data])
   useEffect(() => {
     if (!pushReady) return
@@ -132,8 +139,9 @@ export default function App() {
   const tasks = useMemo(() => data.tasks.filter(t => !t.done), [data.tasks])
   const priorityTasks = useMemo(() => tasks.filter(t => t.priority).sort(sortTasks), [tasks])
   const overdueTasks = useMemo(() => tasks.filter(t => !t.priority && t.dueDate && t.dueDate < todayISO()).sort(sortTasks), [tasks])
-  const normalTasks = useMemo(() => tasks.filter(t => !t.priority && (!t.dueDate || t.dueDate >= todayISO())).sort(sortTasks), [tasks])
-  const now = new Date()
+  const normalTasks = useMemo(() => tasks.filter(t => !t.priority && (!t.dueDate || t.dueDate >= todayISO())).sort(sortTasks)
+  , [tasks])
+  const now = clock
   const nowMin = now.getHours()*60 + now.getMinutes()
   const todayEvents = displayEvents.filter(e => e.date === todayISO()).sort((a,b) => (timeMins(a.start) ?? -1) - (timeMins(b.start) ?? -1))
   const currentEvent = todayEvents.filter(e => {
@@ -203,6 +211,11 @@ export default function App() {
                 const duration=Math.max(30,end-start)
                 return <button key={e.id} className={`event-card ${e.parentId?'child-event':''}`} style={{top:`${start/60*58}px`,height:`${duration/60*58}px`,background:e.color}} onClick={()=>setDetailEvent(e)}><b>{e.title}</b><small>{e.start}〜{fmtTime(e.end)}</small></button>
               })}
+              {selectedDate === todayISO() && (
+                <div className="current-time-line" style={{ top: `${nowMin / 60 * 58}px` }}>
+                  <span>{`${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`}</span>
+                </div>
+              )}
             </div>
           </div>
         </section>}
@@ -319,6 +332,6 @@ function EventList({events,onOpen}:{events:EventItem[];onOpen:(e:EventItem)=>voi
 function CalendarGrid({month,events,selectedDate,onSelect}:{month:Date;events:EventItem[];selectedDate:string;onSelect:(s:string)=>void}) {
   const first=new Date(month.getFullYear(),month.getMonth(),1).getDay()
   const count=new Date(month.getFullYear(),month.getMonth()+1,0).getDate()
-  return <div className="calendar-grid">{['日','月','火','水','木','金','土'].map(d=><b className="weekday" key={d}>{d}</b>)}{Array.from({length:first},(_,i)=><span key={`blank${i}`}/>)}{Array.from({length:count},(_,i)=>{const d=`${month.getFullYear()}-${String(month.getMonth()+1).padStart(2,'0')}-${String(i+1).padStart(2,'0')}`;const es=events.filter(e=>e.date===d);return <button key={d} className={selectedDate===d?'selected-day':''} onClick={()=>onSelect(d)}><span>{i+1}</span>{es.slice(0,3).map(e=><i key={e.id} style={{background:e.color}}/>)}{es.length>3&&<small>+{es.length-3}</small>}</button>})}</div>
+  return <div className="calendar-grid">{['日','月','火','水','木','金','土'].map(d=><b className="weekday" key={d}>{d}</b>)}{Array.from({length:first},(_,i)=><span key={`blank${i}`}/>)}{Array.from({length:count},(_,i)=>{const d=`${month.getFullYear()}-${String(month.getMonth()+1).padStart(2,'0')}-${String(i+1).padStart(2,'0')}`;const es=events.filter(e=>e.date===d);return <button key={d} className={selectedDate===d?'selected-day':''} onClick={()=>onSelect(d)}><span className={d===todayISO()?'today-date':''}>{i+1}</span>{es.slice(0,3).map(e=><i key={e.id} style={{background:e.color}}/>)}{es.length>3&&<small>+{es.length-3}</small>}</button>})}</div>
 }
 function MiniCalendar({month,events}:{month:Date;events:EventItem[]}){const first=new Date(month.getFullYear(),month.getMonth(),1).getDay();const count=new Date(month.getFullYear(),month.getMonth()+1,0).getDate();return <div className="mini-grid">{Array.from({length:first},(_,i)=><span key={`b${i}`}/>)}{Array.from({length:count},(_,i)=>{const d=`${month.getFullYear()}-${String(month.getMonth()+1).padStart(2,'0')}-${String(i+1).padStart(2,'0')}`;return <span key={d} className={events.some(e=>e.date===d)?'has-event':''}>{i+1}</span>})}</div>}

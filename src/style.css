@@ -4,3 +4,48 @@
 .memo-editor[contenteditable="true"] p{margin:0}
 .top-actions{display:flex;align-items:center;gap:4px}.notice-editor{border:1px solid #e9e9ed;border-radius:11px;padding:11px;background:#fcfcfd}.notice-heading,.notice-row-title,.daily-time-row{display:flex;align-items:center;justify-content:space-between;gap:8px}.notice-heading{margin-bottom:8px}.notice-heading small{color:#999;font-weight:400}.notice-row{display:grid;grid-template-columns:1fr 1fr;gap:7px;padding:9px 0;border-top:1px solid #eee}.notice-row-title{grid-column:1/-1;font-size:12px}.notice-row-title button,.daily-time-row>button{border:0;background:transparent;color:#b44;font-size:12px}.notice-row input{min-width:0;width:100%;border:1px solid #ddd;border-radius:8px;padding:8px;background:#fff}.time-rolls{display:flex;gap:6px}.time-rolls select{min-width:0;flex:1;border:1px solid #ddd;border-radius:8px;padding:8px;background:white}.add-notice{border:1px dashed #ccc;border-radius:8px;background:#fff;padding:8px 12px;color:#555;font-size:12px;width:100%;margin-top:7px}.primary-wide{width:100%;border:0;border-radius:9px;padding:11px;background:var(--accent);margin-top:10px}.toggle-row{display:flex;flex-direction:row!important;align-items:center;gap:8px}.daily-times{display:flex;flex-direction:column;gap:8px;margin-top:10px}.daily-time-row{border:1px solid #eee;border-radius:9px;padding:8px}.daily-time-row b{font-size:12px;white-space:nowrap}.daily-time-row .time-rolls{flex:1}.daily-time-row>button{white-space:nowrap}
 .event-time-picker{width:100%}.event-time-picker select{min-width:0;flex:1}
+
+/* 現在時刻ライン */
+.current-time-line {
+  position: absolute;
+  left: -54px;
+  right: 0;
+  height: 2px;
+  background: #e53935;
+  z-index: 10;
+  pointer-events: none;
+}
+.current-time-line::before {
+  content: '';
+  position: absolute;
+  left: 50px;
+  top: -4px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #e53935;
+}
+.current-time-line span {
+  position: absolute;
+  left: 0;
+  top: -10px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  background: #e53935;
+  color: white;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+/* 月間予定：今日の日付 */
+.calendar-grid > button .today-date {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 25px;
+  height: 25px;
+  border: 2px solid #e53935;
+  border-radius: 50%;
+  color: #d32f2f;
+  font-weight: 700;
+}

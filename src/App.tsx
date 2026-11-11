@@ -398,38 +398,6 @@ function TaskModal({initial,onClose,onSave}:{initial:Task|null;onClose:()=>void;
   </form></Modal>
 }
 
-function EventModal({initial,date,allowRecurrence,onClose,onSave}:{initial:EventItem|null;date:string;allowRecurrence:boolean;onClose:()=>void;onSave:(e:EventItem)=>void}) {
-  const [title,setTitle]=useState(initial?.title??'')
-  const [eventDate,setEventDate]=useState(initial?.date??date)
-  const [multiDay,setMultiDay]=useState(!!initial?.endDate)
-  const [endDate,setEndDate]=useState(initial?.endDate??initial?.date??date)
-  const [start,setStart]=useState(initial?.start??'08:00')
-  const [end,setEnd]=useState(initial?.end??'')
-  const [memo,setMemo]=useState(initial?.memo??'')
-  const [color,setColor]=useState(initial?.color??eventColors[0])
-  const [recurrence,setRecurrence]=useState(initial?.recurrence??'')
-  const [notices,setNotices]=useState<Notice[]>(initial?.notices??[])
-  const [dateError,setDateError]=useState('')
-  return <Modal title={initial?'予定を編集':'予定を追加'} onClose={onClose}><form onSubmit={e=>{
-    e.preventDefault()
-    if (!title.trim()) return
-    if (multiDay && endDate < eventDate) { setDateError('終了日は開始日以降の日付にしてください。'); return }
-    onSave({id:initial?.id??uid(),title:title.trim(),date:eventDate,endDate:multiDay?endDate:undefined,start,end,memo,color,parentId:initial?.parentId,recurrence:multiDay?undefined:(initial?.recurrence ?? (recurrence==='weekly'?'weekly':undefined)),excludedDates:initial?.excludedDates,seriesId:initial?.seriesId,occurrence:initial?.occurrence,notices})
-  }}>
-    <label>{multiDay?'開始日':'日付'}<input type="date" required value={eventDate} onChange={e=>{setEventDate(e.target.value);setDateError('')}}/></label>
-    <label className="multi-day-toggle"><input type="checkbox" checked={multiDay} onChange={e=>{setMultiDay(e.target.checked);setDateError('')}}/>複数日にまたがる予定</label>
-    {multiDay && <label>終了日<input type="date" required min={eventDate} value={endDate} onChange={e=>{setEndDate(e.target.value);setDateError('')}}/></label>}
-    {dateError && <p className="form-error">{dateError}</p>}
-    <label>開始時刻<TimePicker value={start} onChange={setStart}/></label>
-    <label>終了時刻<TimePicker value={end} onChange={setEnd}/></label>
-    <label>メモ<textarea rows={3} value={memo} onChange={e=>setMemo(e.target.value)} placeholder="メモ・詳細"/></label>
-    {!initial && allowRecurrence && !multiDay && <label>繰り返し<select value={recurrence} onChange={e=>setRecurrence(e.target.value)}><option value="">指定なし</option><option value="weekly">毎週</option></select></label>}
-    <NoticeEditor notices={notices} onChange={setNotices}/>
-    <label>色<div className="swatches">{eventColors.map(c=><button type="button" key={c} className={`swatch ${color===c?'selected':''}`} style={{background:c}} onClick={()=>setColor(c)}/>)}</div></label>
-    <div className="modal-actions"><button type="button" onClick={onClose}>キャンセル</button><button className="primary" type="submit">{initial?'完了':'追加'}</button></div>
-  </form></Modal>
-}
-
 function TimePicker({value,onChange}:{value:string;onChange:(value:string)=>void}) {
   const [hour,minute]=value ? value.split(':') : ['', '']
   return <div className="time-rolls event-time-picker">
@@ -503,7 +471,7 @@ function EventModal({initial,date,allowRecurrence,onClose,onSave}:{initial:Event
         notices
       })
     }}>
-      {/* ★ 前回抜けていたタイトル入力欄 */}
+      {/* 前回抜けていたタイトル入力欄 */}
       <label>
         タイトル*
         <input
@@ -612,6 +580,49 @@ function EventModal({initial,date,allowRecurrence,onClose,onSave}:{initial:Event
       </div>
     </form>
   </Modal>
+}
+
+function EventList({events,onOpen}:{events:DisplayEvent[];onOpen:(e:DisplayEvent)=>void}) {
+  const sorted=[...events].sort((a,b)=>{
+    const aMulti=!!(a.endDate && a.endDate>a.date)
+    const bMulti=!!(b.endDate && b.endDate>b.date)
+    return Number(bMulti)-Number(aMulti) ||
+      (timeMins(a.displayStart) ?? -1)-(timeMins(b.displayStart) ?? -1)
+  })
+
+  if(sorted.length===0) {
+    return <p className="muted group-empty">この日の予定はありません</p>
+  }
+
+  return (
+    <div className="event-list">
+      {sorted.map(ev=>{
+        const multi=!!(ev.endDate && ev.endDate>ev.date)
+        const dateLabel=multi
+          ? `${dateText(ev.date)}〜${dateText(ev.endDate!)}`
+          : dateText(ev.displayDate)
+        const timeLabel=multi
+          ? `${ev.rangeFirst ? (ev.displayStart || '終日') : '終日'}〜${ev.rangeLast ? (ev.displayEnd || '終日') : '終日'}`
+          : `${ev.displayStart || '指定なし'}〜${ev.displayEnd || '未設定'}`
+
+        return (
+          <button
+            type="button"
+            className="home-line event-list-row"
+            key={`${ev.id}-${ev.displayDate}`}
+            onClick={()=>onOpen(ev)}
+          >
+            <span className="event-list-color" style={{background:ev.color}}/>
+            <span className="event-list-main">
+              <b>{ev.title}</b>
+              <small>{dateLabel}　{timeLabel}</small>
+            </span>
+            <ChevronRight size={18}/>
+          </button>
+        )
+      })}
+    </div>
+  )
 }
 
 function CalendarGrid({month,events,selectedDate,onSelect}:{month:Date;events:DisplayEvent[];selectedDate:string;onSelect:(s:string)=>void}) {

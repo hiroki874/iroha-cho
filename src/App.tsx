@@ -1,4 +1,3 @@
-
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { enablePush, hasPushSubscription, syncPushJobs, type Notice, type PushJob } from './push'
 import {
@@ -10,7 +9,8 @@ import {
 type Page = 'home' | 'todo' | 'day' | 'month' | 'memo' | 'settings'
 type ThemeColor = 'pink' | 'red' | 'blue' | 'yellow' | 'orange' | 'green'
 type Task = { id: string; title: string; dueDate: string; dueTime: string; memo: string; priority: boolean; done: boolean; createdAt: number; notices?: Notice[] }
-type EventItem = { id: string; title: string; date: string; start: string; end: string; memo: string; color: string; parentId?: string; recurrence?: 'weekly'; excludedDates?: string[]; seriesId?: string; occurrence?: boolean; notices?: Notice[] }
+type EventItem = { id: string; title: string; date: string; endDate?: string; start: string; end: string; memo: string; color: string; parentId?: string; recurrence?: 'weekly'; excludedDates?: string[]; seriesId?: string; occurrence?: boolean; notices?: Notice[] }
+type DisplayEvent = EventItem & { displayDate: string; displayStart: string; displayEnd: string; rangeFirst: boolean; rangeLast: boolean }
 type Data = { tasks: Task[]; events: EventItem[]; memos: { home: string; other: string }; theme: ThemeColor; fontMode: 'normal' | 'ud'; dailyNotifications: { enabled: boolean; times: string[] } }
 
 const STORAGE = 'techo-planner-v1'
@@ -32,6 +32,33 @@ const timeMins = (s: string) => {
   return h * 60 + m
 }
 const fmtTime = (s: string) => s || '未設定'
+const addDaysISO = (date: string, amount: number) => {
+  const d = new Date(`${date}T12:00:00`)
+  d.setDate(d.getDate() + amount)
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
+}
+const eventRangeStart = (ev: EventItem) => new Date(`${ev.date}T${ev.start || '00:00'}:00`).getTime()
+const eventRangeEnd = (ev: EventItem) => new Date(`${ev.endDate || ev.date}T${ev.end || '23:59'}:00`).getTime()
+const eventRangesOverlap = (a: EventItem, b: EventItem) => eventRangeStart(a) < eventRangeEnd(b) && eventRangeStart(b) < eventRangeEnd(a)
+
+const endCountdownText = (ev: DisplayEvent, now: Date) => {
+  if (!ev.end && !ev.endDate) return '終了時刻未設定'
+  const endDate = ev.endDate || ev.date
+  const targetTime = ev.end || '23:59'
+  const target = new Date(`${endDate}T${targetTime}:00`)
+  const diff = target.getTime() - now.getTime()
+  if (diff <= 0) return '終了予定時刻を過ぎています'
+  if (diff < 24 * 60 * 60 * 1000) {
+    const totalMinutes = Math.ceil(diff / 60000)
+    const hours = Math.floor(totalMinutes / 60)
+    const minutes = totalMinutes % 60
+    return `終了まであと${hours}時間${minutes}分`
+  }
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  const targetDay = new Date(`${endDate}T00:00:00`)
+  const days = Math.round((targetDay.getTime() - today.getTime()) / (24 * 60 * 60 * 1000))
+  return `終了まであと${days}日`
+}
 
 // 残り時間の表示
 const countdownText = (
@@ -135,9 +162,9 @@ export default function App() {
         const date = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
         data.dailyNotifications.times.forEach((time, i) => {
           const [hh, mm] = time.split(':').map(Number); const atMin = hh * 60 + mm
-          const dayEvents = displayEvents.filter(e => e.date === date).sort((a,b)=>(timeMins(a.start) ?? -1)-(timeMins(b.start) ?? -1))
-          const active = dayEvents.filter(e => { const st=timeMins(e.start); const en=timeMins(e.end); return st !== null && st <= atMin && (en === null || atMin < en) }).sort((a,b)=>Number(!!b.parentId)-Number(!!a.parentId))[0]
-          const upcoming = dayEvents.filter(e => (timeMins(e.start) ?? -1) > atMin)[0]
+          const dayEvents = displayEvents.filter(e => e.displayDate === date).sort((a,b)=>(timeMins(a.displayStart) ?? 0)-(timeMins(b.displayStart) ?? 0))
+          const active = dayEvents.filter(e => { const st=timeMins(e.displayStart) ?? 0; const en=timeMins(e.displayEnd) ?? 1440; return st <= atMin && atMin < en }).sort((a,b)=>Number(!!b.parentId)-Number(!!a.parentId))[0]
+          const upcoming = dayEvents.filter(e => (timeMins(e.displayStart) ?? 0) > atMin)[0]
           const dailyBody = `～定時通知～\n\n-優先タスク-\n${taskLines}${extra}\n\n-今の予定-\n${active ? `・${active.title}` : '・なし'}\n\n-次の予定-\n${upcoming ? `・${upcoming.title}` : '・なし'}`
           add(`daily-${date}-${i}`, date, time, 'いろは帳', dailyBody)
         })
@@ -158,17 +185,34 @@ export default function App() {
     setRepeatDelete(null); setConfirm(null); setDetailEvent(null)
   }
 
-  const displayEvents = useMemo(() => {
-    const result: EventItem[] = []
+  const displayEvents = useMemo<DisplayEvent[]>(() => {
+    const result: DisplayEvent[] = []
     const limit = new Date(); limit.setFullYear(limit.getFullYear() + 5)
+    const addEventDays = (ev: EventItem) => {
+      const lastDate = ev.endDate && ev.endDate >= ev.date ? ev.endDate : ev.date
+      let cursor = ev.date
+      while (cursor <= lastDate) {
+        result.push({
+          ...ev,
+          displayDate: cursor,
+          displayStart: cursor === ev.date ? ev.start : '',
+          displayEnd: cursor === lastDate ? ev.end : '',
+          rangeFirst: cursor === ev.date,
+          rangeLast: cursor === lastDate,
+        })
+        cursor = addDaysISO(cursor, 1)
+      }
+    }
     for (const ev of data.events) {
-      if (!(ev.excludedDates ?? []).includes(ev.date)) result.push(ev)
+      if (!(ev.excludedDates ?? []).includes(ev.date)) addEventDays(ev)
       if (ev.recurrence === 'weekly') {
         const cursor = new Date(`${ev.date}T12:00:00`)
         cursor.setDate(cursor.getDate() + 7)
         while (cursor <= limit) {
           const date = `${cursor.getFullYear()}-${String(cursor.getMonth()+1).padStart(2,'0')}-${String(cursor.getDate()).padStart(2,'0')}`
-          if (!(ev.excludedDates ?? []).includes(date)) result.push({ ...ev, id: `${ev.id}::${date}`, date, recurrence: undefined, seriesId: ev.id, occurrence: true })
+          if (!(ev.excludedDates ?? []).includes(date)) {
+            addEventDays({ ...ev, id: `${ev.id}::${date}`, date, endDate: undefined, recurrence: undefined, seriesId: ev.id, occurrence: true })
+          }
           cursor.setDate(cursor.getDate() + 7)
         }
       }
@@ -182,12 +226,15 @@ export default function App() {
   const normalTasks = useMemo(() => tasks.filter(t => !t.priority && (!t.dueDate || t.dueDate >= todayISO())).sort(sortTasks), [tasks])
   const now = clock
   const nowMin = now.getHours()*60 + now.getMinutes()
-  const todayEvents = displayEvents.filter(e => e.date === todayISO()).sort((a,b) => (timeMins(a.start) ?? -1) - (timeMins(b.start) ?? -1))
-  const currentEvent = todayEvents.filter(e => {
-    const s = timeMins(e.start); const end = timeMins(e.end)
-    return s !== null && s <= nowMin && (end === null || nowMin < end)
-  }).sort((a,b) => Number(!!b.parentId)-Number(!!a.parentId))[0]
-  const nextEvent = todayEvents.filter(e => (timeMins(e.start) ?? -1) > nowMin).sort((a,b) => (timeMins(a.start) ?? 0)-(timeMins(b.start) ?? 0))[0]
+  const todayEvents = displayEvents.filter(e => e.displayDate === todayISO()).sort((a,b) => (timeMins(a.displayStart) ?? 0) - (timeMins(b.displayStart) ?? 0))
+  const activeEvents = todayEvents.filter(e => {
+    const s = timeMins(e.displayStart) ?? 0
+    const end = timeMins(e.displayEnd) ?? 1440
+    return s <= nowMin && nowMin < end
+  })
+  const currentEvent = activeEvents.sort((a,b) => Number(!!b.parentId)-Number(!!a.parentId))[0]
+    ?? todayEvents.filter(e => (timeMins(e.displayStart) ?? 0) <= nowMin).sort((a,b) => (timeMins(b.displayStart) ?? 0)-(timeMins(a.displayStart) ?? 0))[0]
+  const nextEvent = todayEvents.filter(e => (timeMins(e.displayStart) ?? 0) > nowMin).sort((a,b) => (timeMins(a.displayStart) ?? 0)-(timeMins(b.displayStart) ?? 0))[0]
 
   const openNewEvent = (date = selectedDate) => { setEditingEvent(null); setEventForm(true); setSelectedDate(date) }
   const saveEvent = (ev: EventItem) => {
@@ -196,7 +243,7 @@ export default function App() {
       setData(d => ({ ...d, events: [...d.events.map(x => x.id === ev.seriesId ? { ...x, excludedDates: [...(x.excludedDates ?? []), ev.date] } : x), standalone] }))
       setEventForm(false); setEditingEvent(null); return
     }
-    const overlapping = data.events.find(old => old.id !== ev.id && old.date === ev.date && timeMins(old.start) !== null && timeMins(ev.start) !== null && timeMins(old.end || '23:45')! > timeMins(ev.start)! && timeMins(ev.end || '23:45')! > timeMins(old.start)!)
+    const overlapping = data.events.find(old => old.id !== ev.id && eventRangesOverlap(old, ev))
     if (overlapping && !ev.parentId) { setPendingEvent(ev); setOverlapCandidate(overlapping); return }
     updateEvent(ev); setEventForm(false); setEditingEvent(null)
   }
@@ -231,8 +278,8 @@ export default function App() {
               {currentEvent ? (
                 <button className="home-line" onClick={()=>setDetailEvent(currentEvent)}>
                   {currentEvent.title}
-                  <small>{currentEvent.start}〜{fmtTime(currentEvent.end)}</small>
-                  <small className="countdown">{countdownText(currentEvent.date,currentEvent.start,'event',now)}</small>
+                  <small>{currentEvent.displayStart || (currentEvent.endDate ? '00:00' : '指定なし')}〜{currentEvent.displayEnd || (currentEvent.endDate ? '24:00' : fmtTime(currentEvent.end))}</small>
+                  <small className="countdown">{endCountdownText(currentEvent,now)}</small>
                 </button>
               ) : <p className="muted">現在の予定はありません</p>}
             </article>
@@ -241,8 +288,8 @@ export default function App() {
               {nextEvent ? (
                 <button className="home-line" onClick={()=>setDetailEvent(nextEvent)}>
                   {nextEvent.title}
-                  <small>{nextEvent.start}〜{fmtTime(nextEvent.end)}</small>
-                  <small className="countdown">{countdownText(nextEvent.date,nextEvent.start,'event',now)}</small>
+                  <small>{nextEvent.start || '指定なし'}〜{fmtTime(nextEvent.end)}</small>
+                  <small className="countdown">{countdownText(nextEvent.displayDate,nextEvent.displayStart,'event',now)}</small>
                 </button>
               ) : <p className="muted">次の予定はありません</p>}
             </article>
@@ -269,13 +316,15 @@ export default function App() {
           <div className="timeline">
             {Array.from({length:24},(_,h)=><div className="hour-row" key={h}><span>{h}:00</span><div className="hour-line"/></div>)}
             <div className="event-layer">
-              {displayEvents.filter(e=>e.date===selectedDate).map(e=>{
-                const start=timeMins(e.start) ?? 0
-                const actualEnd=timeMins(e.end)
-                const next=displayEvents.filter(x=>x.date===e.date && x.id!==e.id && (timeMins(x.start)??0)>start).sort((a,b)=>(timeMins(a.start)??0)-(timeMins(b.start)??0))[0]
-                const end=actualEnd ?? Math.min(start+60, timeMins(next?.start ?? '') ?? start+60)
+              {displayEvents.filter(e=>e.displayDate===selectedDate).map(e=>{
+                const start=timeMins(e.displayStart) ?? 0
+                const actualEnd=timeMins(e.displayEnd)
+                const next=displayEvents.filter(x=>x.displayDate===e.displayDate && x.id!==e.id && (timeMins(x.displayStart)??0)>start).sort((a,b)=>(timeMins(a.displayStart)??0)-(timeMins(b.displayStart)??0))[0]
+                const isRange = !!e.endDate && e.endDate >= e.date
+                const end=actualEnd ?? (isRange ? 1440 : Math.min(start+60, timeMins(next?.displayStart ?? '') ?? start+60))
                 const duration=Math.max(30,end-start)
-                return <button key={e.id} className={`event-card ${e.parentId?'child-event':''}`} style={{top:`${start/60*58}px`,height:`${duration/60*58}px`,background:e.color}} onClick={()=>setDetailEvent(e)}><b>{e.title}</b><small>{e.start}〜{fmtTime(e.end)}</small></button>
+                const timeLabel = `${e.displayStart || (isRange && !e.rangeFirst ? '00:00' : (isRange ? '終日' : '指定なし'))}〜${e.displayEnd || (isRange ? (e.rangeLast ? '終日' : '24:00') : '未設定')}`
+                return <button key={e.id} className={`event-card ${e.parentId?'child-event':''}`} style={{top:`${start/60*58}px`,height:`${duration/60*58}px`,background:e.color}} onClick={()=>setDetailEvent(e)}><b>{e.title}</b><small>{timeLabel}</small></button>
               })}
               {selectedDate === todayISO() && (
                 <div className="current-time-line" style={{ top: `${nowMin / 60 * 58}px` }}>
@@ -288,7 +337,7 @@ export default function App() {
 
         {page === 'month' && <section className="page-section">
           <div className="page-heading"><button className="month-title" onClick={()=>setMonthPicker(!monthPicker)}>{month.getFullYear()}年{month.getMonth()+1}月 <span>▾</span></button><button className="add-button" onClick={()=>openNewEvent(todayISO())}><Plus/></button></div>
-          {!monthPicker ? <><div className="month-arrows"><button onClick={()=>setMonth(new Date(month.getFullYear(),month.getMonth()-1,1))}><ChevronLeft/></button><button onClick={()=>setMonth(new Date(month.getFullYear(),month.getMonth()+1,1))}><ChevronRight/></button></div><CalendarGrid month={month} events={displayEvents} selectedDate={selectedDate} onSelect={d=>{setSelectedDate(d)}}/><h2 className="day-list-title">{dateText(selectedDate)}の予定</h2><EventList events={displayEvents.filter(e=>e.date===selectedDate)} onOpen={setDetailEvent}/></> :
+          {!monthPicker ? <><div className="month-arrows"><button onClick={()=>setMonth(new Date(month.getFullYear(),month.getMonth()-1,1))}><ChevronLeft/></button><button onClick={()=>setMonth(new Date(month.getFullYear(),month.getMonth()+1,1))}><ChevronRight/></button></div><CalendarGrid month={month} events={displayEvents} selectedDate={selectedDate} onSelect={d=>{setSelectedDate(d)}}/><h2 className="day-list-title">{dateText(selectedDate)}の予定</h2><EventList events={displayEvents.filter(e=>e.displayDate===selectedDate)} onOpen={setDetailEvent}/></> :
             <><div className="month-picker-grid">{[-1,0,1,2,3,4].map(offset=>{const m=new Date(month.getFullYear(),month.getMonth()+offset,1);return <button key={offset} onClick={()=>{setMonth(m);setMonthPicker(false)}}><b>{m.getFullYear()}年{m.getMonth()+1}月</b><MiniCalendar month={m} events={displayEvents}/></button>})}</div><button className="today-button" onClick={()=>{setMonth(new Date(now.getFullYear(),now.getMonth(),1));setMonthPicker(false)}}>今月に戻る</button></>}
         </section>}
 
@@ -308,7 +357,7 @@ export default function App() {
       {eventForm && <EventModal initial={editingEvent} date={selectedDate} allowRecurrence={page==='month'} onClose={()=>setEventForm(false)} onSave={saveEvent}/>}
       {overlapCandidate && pendingEvent && <Modal title="予定の時間が重なっています" onClose={()=>{setOverlapCandidate(null);setPendingEvent(null)}}><p>「{pendingEvent.title}」を「{overlapCandidate.title}」の中に入れますか？</p><div className="modal-actions"><button onClick={()=>{updateEvent(pendingEvent);setPendingEvent(null);setOverlapCandidate(null);setEventForm(false)}}>別々に登録</button><button className="primary" onClick={saveAsChild}>中に入れる</button></div></Modal>}
       {detailTask && <Modal title={detailTask.title} onClose={()=>setDetailTask(null)}><p>{detailTask.memo||'メモなし'}</p><p className="detail-meta">期限：{detailTask.dueDate?dateText(detailTask.dueDate):'未設定'} {detailTask.dueTime}</p><p className="detail-meta">優先度：{detailTask.priority?'優先':'通常'}　{detailTask.done?'完了':'未完了'}</p><p className="detail-meta">通知：{(detailTask.notices??[]).length}件</p><div className="modal-actions"><button onClick={()=>{setEditingTask(detailTask);setDetailTask(null);setTaskForm(true)}}><Pencil size={16}/> 編集</button><button onClick={()=>setConfirm({kind:'task',id:detailTask.id})}>削除</button></div></Modal>}
-      {detailEvent && <Modal title={detailEvent.title} onClose={()=>setDetailEvent(null)}><p className="detail-meta">{detailEvent.date}　{detailEvent.start}〜{fmtTime(detailEvent.end)}</p><p className="detail-meta">通知：{(detailEvent.notices??[]).length}件</p><p>{detailEvent.memo||'メモなし'}</p><div className="modal-actions"><button onClick={()=>{setEditingEvent(detailEvent);setSelectedDate(detailEvent.date);setDetailEvent(null);setEventForm(true)}}><Pencil size={16}/> 編集</button><button onClick={()=>detailEvent.recurrence==='weekly' || detailEvent.seriesId ? setRepeatDelete(detailEvent) : setConfirm({kind:'event',id:detailEvent.id})}>削除</button></div></Modal>}
+      {detailEvent && <Modal title={detailEvent.title} onClose={()=>setDetailEvent(null)}><p className="detail-meta">{detailEvent.endDate ? `${detailEvent.date} ～ ${detailEvent.endDate}` : detailEvent.date}　{detailEvent.start || '指定なし'}〜{fmtTime(detailEvent.end)}</p><p className="detail-meta">通知：{(detailEvent.notices??[]).length}件</p><p>{detailEvent.memo||'メモなし'}</p><div className="modal-actions"><button onClick={()=>{setEditingEvent(detailEvent);setSelectedDate(detailEvent.date);setDetailEvent(null);setEventForm(true)}}><Pencil size={16}/> 編集</button><button onClick={()=>detailEvent.recurrence==='weekly' || detailEvent.seriesId ? setRepeatDelete(detailEvent) : setConfirm({kind:'event',id:detailEvent.id})}>削除</button></div></Modal>}
       {repeatDelete && <Modal title="繰り返し予定の削除" onClose={()=>setRepeatDelete(null)}><p>どの範囲を削除しますか？</p><div className="modal-actions"><button onClick={()=>setRepeatDelete(null)}>キャンセル</button><button onClick={()=>deleteEventOccurrence(repeatDelete,false)}>この予定だけ削除</button><button className="danger" onClick={()=>deleteEventOccurrence(repeatDelete,true)}>繰り返し予定をすべて削除</button></div></Modal>}
       {confirm && <Modal title={confirm.kind==='task'?'タスクの確認':'予定の確認'} onClose={()=>setConfirm(null)}><p>{confirm.kind==='task'?'このタスクを完了または削除しますか？':'この予定を削除しますか？'}</p><div className="modal-actions"><button onClick={()=>setConfirm(null)}>キャンセル</button>{confirm.kind==='task' && <button className="primary" onClick={()=>{const t=data.tasks.find(x=>x.id===confirm.id);if(t)updateTask({...t,done:true});setConfirm(null);setDetailTask(null)}}>完了する</button>}<button className="danger" onClick={()=>{if(confirm.kind==='task')deleteTask(confirm.id);else deleteEvent(confirm.id);setConfirm(null)}}>削除</button></div></Modal>}
     </div>
@@ -352,33 +401,44 @@ function TaskModal({initial,onClose,onSave}:{initial:Task|null;onClose:()=>void;
 function EventModal({initial,date,allowRecurrence,onClose,onSave}:{initial:EventItem|null;date:string;allowRecurrence:boolean;onClose:()=>void;onSave:(e:EventItem)=>void}) {
   const [title,setTitle]=useState(initial?.title??'')
   const [eventDate,setEventDate]=useState(initial?.date??date)
+  const [multiDay,setMultiDay]=useState(!!initial?.endDate)
+  const [endDate,setEndDate]=useState(initial?.endDate??initial?.date??date)
   const [start,setStart]=useState(initial?.start??'08:00')
   const [end,setEnd]=useState(initial?.end??'')
   const [memo,setMemo]=useState(initial?.memo??'')
   const [color,setColor]=useState(initial?.color??eventColors[0])
   const [recurrence,setRecurrence]=useState(initial?.recurrence??'')
   const [notices,setNotices]=useState<Notice[]>(initial?.notices??[])
-  return <Modal title={initial?'予定を編集':'予定を追加'} onClose={onClose}><form onSubmit={e=>{e.preventDefault();if(title.trim())onSave({id:initial?.id??uid(),title:title.trim(),date:eventDate,start,end,memo,color,parentId:initial?.parentId,recurrence:initial?.recurrence ?? (recurrence==='weekly'?'weekly':undefined),excludedDates:initial?.excludedDates,seriesId:initial?.seriesId,occurrence:initial?.occurrence,notices})}}>
-    <label>タイトル*<input required value={title} onChange={e=>setTitle(e.target.value)}/></label>
-    <label>日付<input type="date" required value={eventDate} onChange={e=>setEventDate(e.target.value)}/></label>
+  const [dateError,setDateError]=useState('')
+  return <Modal title={initial?'予定を編集':'予定を追加'} onClose={onClose}><form onSubmit={e=>{
+    e.preventDefault()
+    if (!title.trim()) return
+    if (multiDay && endDate < eventDate) { setDateError('終了日は開始日以降の日付にしてください。'); return }
+    onSave({id:initial?.id??uid(),title:title.trim(),date:eventDate,endDate:multiDay?endDate:undefined,start,end,memo,color,parentId:initial?.parentId,recurrence:multiDay?undefined:(initial?.recurrence ?? (recurrence==='weekly'?'weekly':undefined)),excludedDates:initial?.excludedDates,seriesId:initial?.seriesId,occurrence:initial?.occurrence,notices})
+  }}>
+    <label>{multiDay?'開始日':'日付'}<input type="date" required value={eventDate} onChange={e=>{setEventDate(e.target.value);setDateError('')}}/></label>
+    <label className="multi-day-toggle"><input type="checkbox" checked={multiDay} onChange={e=>{setMultiDay(e.target.checked);setDateError('')}}/>複数日にまたがる予定</label>
+    {multiDay && <label>終了日<input type="date" required min={eventDate} value={endDate} onChange={e=>{setEndDate(e.target.value);setDateError('')}}/></label>}
+    {dateError && <p className="form-error">{dateError}</p>}
     <label>開始時刻<TimePicker value={start} onChange={setStart}/></label>
-    <label>終了時刻<TimePicker value={end} onChange={setEnd} allowUnset/></label>
+    <label>終了時刻<TimePicker value={end} onChange={setEnd}/></label>
     <label>メモ<textarea rows={3} value={memo} onChange={e=>setMemo(e.target.value)} placeholder="メモ・詳細"/></label>
-    {!initial && allowRecurrence && <label>繰り返し<select value={recurrence} onChange={e=>setRecurrence(e.target.value)}><option value="">指定なし</option><option value="weekly">毎週</option></select></label>}
+    {!initial && allowRecurrence && !multiDay && <label>繰り返し<select value={recurrence} onChange={e=>setRecurrence(e.target.value)}><option value="">指定なし</option><option value="weekly">毎週</option></select></label>}
     <NoticeEditor notices={notices} onChange={setNotices}/>
     <label>色<div className="swatches">{eventColors.map(c=><button type="button" key={c} className={`swatch ${color===c?'selected':''}`} style={{background:c}} onClick={()=>setColor(c)}/>)}</div></label>
     <div className="modal-actions"><button type="button" onClick={onClose}>キャンセル</button><button className="primary" type="submit">{initial?'完了':'追加'}</button></div>
   </form></Modal>
 }
 
-function TimePicker({value,onChange,allowUnset=false}:{value:string;onChange:(value:string)=>void;allowUnset?:boolean}) {
-  const [hour,minute]=value ? value.split(':') : ['', '00']
+function TimePicker({value,onChange}:{value:string;onChange:(value:string)=>void}) {
+  const [hour,minute]=value ? value.split(':') : ['', '']
   return <div className="time-rolls event-time-picker">
     <select aria-label="時" value={hour} onChange={e=>onChange(e.target.value===''?'':`${e.target.value}:${minute||'00'}`)}>
-      {allowUnset&&<option value="">選択しない</option>}
+      <option value="">指定しない</option>
       {Array.from({length:24},(_,h)=>{const v=String(h).padStart(2,'0');return <option key={v} value={v}>{v}時</option>})}
     </select>
     <select aria-label="分" value={minute} disabled={!hour} onChange={e=>onChange(`${hour}:${e.target.value}`)}>
+      <option value="">—</option>
       {['00','15','30','45'].map(m=><option key={m} value={m}>{m}分</option>)}
     </select>
   </div>
@@ -403,10 +463,190 @@ function MemoEditor({page,value,onChange}:{page:'home'|'other';value:string;onCh
 function memoToHtml(value:string){ if(!value) return ''; if(value.includes('<') && value.includes('>')) return value; return value.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/\n/g,'<br>') }
 function memoToText(value:string){ if(!value) return ''; const el=document.createElement('div'); el.innerHTML=memoToHtml(value); return el.textContent ?? '' }
 function Modal({title,children,onClose}:{title:string;children:React.ReactNode;onClose:()=>void}){return <div className="modal-backdrop" onMouseDown={onClose}><div className="modal" onMouseDown={e=>e.stopPropagation()}><div className="modal-head"><b>{title}</b><button className="icon-button" onClick={onClose}><X/></button></div>{children}</div></div>}
-function EventList({events,onOpen}:{events:EventItem[];onOpen:(e:EventItem)=>void}){return <div className="event-list">{events.length?events.sort((a,b)=>a.start.localeCompare(b.start)).map(e=><button key={e.id} onClick={()=>onOpen(e)}><i style={{background:e.color}}/><span>{e.title}<small>{e.start}〜{fmtTime(e.end)}</small></span></button>):<p className="muted">この日の予定はありません</p>}</div>}
-function CalendarGrid({month,events,selectedDate,onSelect}:{month:Date;events:EventItem[];selectedDate:string;onSelect:(s:string)=>void}) {
+
+function EventList({events,onOpen}:{events:DisplayEvent[];onOpen:(e:DisplayEvent)=>void}){
+  const sorted=[...events].sort((a,b)=>
+    Number(!!(b.endDate && b.endDate>b.date))-
+    Number(!!(a.endDate && a.endDate>a.date)) ||
+    (a.displayStart||'').localeCompare(b.displayStart||'')
+  )
+
+  return (
+    <div className="event-list">
+      {sorted.length ? sorted.map(e=>(
+        <button key={e.id} onClick={()=>onOpen(e)}>
+          <i style={{background:e.color}}/>
+          <span>
+            {e.title}
+            <small>
+              {e.endDate && e.endDate>e.date ? `${e.date}〜${e.endDate}　` : ''}
+              {e.displayStart || (e.endDate && !e.rangeFirst
+                ? '00:00'
+                : (e.endDate ? '終日' : '指定なし'))}
+              〜
+              {e.displayEnd || (e.endDate ? '24:00' : '未設定')}
+            </small>
+          </span>
+        </button>
+      )) : (
+        <p className="muted">この日の予定はありません</p>
+      )}
+    </div>
+  )
+}
+
+function CalendarGrid({month,events,selectedDate,onSelect}:{month:Date;events:DisplayEvent[];selectedDate:string;onSelect:(s:string)=>void}) {
   const first=new Date(month.getFullYear(),month.getMonth(),1).getDay()
   const count=new Date(month.getFullYear(),month.getMonth()+1,0).getDate()
-  return <div className="calendar-grid">{['日','月','火','水','木','金','土'].map(d=><b className="weekday" key={d}>{d}</b>)}{Array.from({length:first},(_,i)=><span key={`blank${i}`}/>)}{Array.from({length:count},(_,i)=>{const d=`${month.getFullYear()}-${String(month.getMonth()+1).padStart(2,'0')}-${String(i+1).padStart(2,'0')}`;const es=events.filter(e=>e.date===d);return <button key={d} className={selectedDate===d?'selected-day':''} onClick={()=>onSelect(d)}><span className={d===todayISO()?'today-date':''}>{i+1}</span>{es.slice(0,3).map(e=><i key={e.id} style={{background:e.color}}/>)}{es.length>3&&<small>+{es.length-3}</small>}</button>})}</div>
+  const cells:(string|null)[]=[
+    ...Array(first).fill(null),
+    ...Array.from({length:count},(_,i)=>`${month.getFullYear()}-${String(month.getMonth()+1).padStart(2,'0')}-${String(i+1).padStart(2,'0')}`)
+  ]
+
+  while(cells.length%7) cells.push(null)
+
+  const weeks=Array.from(
+    {length:cells.length/7},
+    (_,i)=>cells.slice(i*7,i*7+7)
+  )
+
+  const multiEvents=events.filter(
+    e=>e.rangeFirst && !!e.endDate && e.endDate>e.date
+  )
+
+  return (
+    <div className="calendar-grid">
+      <div className="calendar-weekday-row">
+        {['日','月','火','水','木','金','土'].map(d=>(
+          <b className="weekday" key={d}>{d}</b>
+        ))}
+      </div>
+
+      {weeks.map((week,wi)=>{
+        const weekStart=week.find(Boolean) as string
+        const weekEnd=[...week].reverse().find(Boolean) as string
+
+        const weekBars=multiEvents
+          .filter(e=>
+            e.date<=weekEnd &&
+            (e.endDate||e.date)>=weekStart
+          )
+          .sort((a,b)=>a.date.localeCompare(b.date))
+
+        const laneEnds:number[]=[]
+
+        const bars=weekBars.map(e=>{
+          const eventStartCol=week.findIndex(d=>d===e.date)
+          const eventEndCol=week.findIndex(d=>d===e.endDate)
+
+          const startCol=Math.max(
+            0,
+            eventStartCol>=0 ? eventStartCol : 0
+          )
+
+          const endCol=Math.min(
+            6,
+            eventEndCol>=0 ? eventEndCol : 6
+          )
+
+          let lane=laneEnds.findIndex(last=>last<startCol)
+
+          if(lane<0) lane=laneEnds.length
+
+          laneEnds[lane]=endCol
+
+          return {
+            event:e,
+            start:startCol,
+            end:endCol,
+            lane,
+            continues:e.date<weekStart
+          }
+        })
+
+        return (
+          <div className="calendar-week" key={wi}>
+            {week.map((d,di)=>{
+              if(!d){
+                return (
+                  <span
+                    className="calendar-empty-day"
+                    key={`empty-${wi}-${di}`}
+                  />
+                )
+              }
+
+              const es=events.filter(
+                e=>e.displayDate===d &&
+                !(e.endDate && e.endDate>e.date)
+              )
+
+              return (
+                <button
+                  key={d}
+                  className={`calendar-day${selectedDate===d?' selected-day':''}`}
+                  onClick={()=>onSelect(d)}
+                >
+                  <span className={d===todayISO()?'today-date':''}>
+                    {Number(d.slice(-2))}
+                  </span>
+
+                  <div className="calendar-day-dots">
+                    {es.slice(0,3).map(e=>(
+                      <i
+                        key={e.id}
+                        style={{background:e.color}}
+                      />
+                    ))}
+
+                    {es.length>3 && (
+                      <small>+{es.length-3}</small>
+                    )}
+                  </div>
+                </button>
+              )
+            })}
+
+            {bars.map(({event,start,end,lane,continues})=>(
+              <div
+                key={`${event.id}-${wi}`}
+                className="calendar-span-bar"
+                style={{
+                  gridColumn:`${start+1}/${end+2}`,
+                  gridRow:2,
+                  marginTop:lane*15,
+                  background:event.color
+                }}
+                title={event.title}
+              >
+                {continues?'↳ ':''}{event.title}
+              </div>
+            ))}
+          </div>
+        )
+      })}
+    </div>
+  )
 }
-function MiniCalendar({month,events}:{month:Date;events:EventItem[]}){const first=new Date(month.getFullYear(),month.getMonth(),1).getDay();const count=new Date(month.getFullYear(),month.getMonth()+1,0).getDate();return <div className="mini-grid">{Array.from({length:first},(_,i)=><span key={`b${i}`}/>)}{Array.from({length:count},(_,i)=>{const d=`${month.getFullYear()}-${String(month.getMonth()+1).padStart(2,'0')}-${String(i+1).padStart(2,'0')}`;return <span key={d} className={events.some(e=>e.date===d)?'has-event':''}>{i+1}</span>})}</div>}
+
+function MiniCalendar({month,events}:{month:Date;events:DisplayEvent[]}) {
+  const first=new Date(month.getFullYear(),month.getMonth(),1).getDay()
+  const count=new Date(month.getFullYear(),month.getMonth()+1,0).getDate()
+
+  return (
+    <div className="mini-grid">
+      {Array.from({length:first},(_,i)=><span key={`b${i}`}/>)}
+      {Array.from({length:count},(_,i)=>{
+        const d=`${month.getFullYear()}-${String(month.getMonth()+1).padStart(2,'0')}-${String(i+1).padStart(2,'0')}`
+        return (
+          <span
+            key={d}
+            className={events.some(e=>e.displayDate===d)?'has-event':''}
+          >
+            {i+1}
+          </span>
+        )
+      })}
+    </div>
+  )
+}
